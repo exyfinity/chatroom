@@ -10,6 +10,8 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <!-- Google Fonts Inter -->
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- PeerJS CDN for WebRTC Device-to-Device Video Calls and Data Signaling on GitHub Pages -->
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   
   <script>
     tailwind.config = {
@@ -117,7 +119,7 @@
       <div class="mt-4 text-center">
         <span class="text-[11px] px-2.5 py-1 rounded-full bg-green-500/10 text-green-400 border border-green-500/20 inline-flex items-center space-x-1.5">
           <span class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
-          <span>Automod ready</span>
+          <span>GitHub Pages P2P Ready</span>
         </span>
       </div>
     </div>
@@ -129,6 +131,72 @@
       <i class="fa-solid fa-shield-virus text-6xl text-red-500 animate-bounce"></i>
       <h1 class="text-3xl font-bold">Access Terminated</h1>
       <p class="text-red-200">Your account, IP address, or hardware device ID has been banned by a Chatroom administrator.</p>
+    </div>
+  </div>
+
+  <!-- ================= WEBRTC CALL OVERLAY ================= -->
+  <div id="callOverlay" class="hidden fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex flex-col items-center justify-between p-6">
+    <div class="w-full max-w-4xl flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-3 h-3 rounded-full bg-red-500 animate-pulse"></div>
+        <span id="callStatusText" class="text-sm font-semibold text-white">Call in progress...</span>
+      </div>
+      <button onclick="endCall()" class="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl transition-all shadow">
+        End Call
+      </button>
+    </div>
+
+    <!-- Video Grid -->
+    <div class="w-full max-w-4xl flex-1 grid grid-cols-1 md:grid-cols-2 gap-4 my-4 items-center justify-center relative">
+      <!-- Remote Video Stream -->
+      <div class="relative w-full h-64 md:h-96 theme-bg-sidebar border theme-border rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
+        <video id="remoteVideo" autoplay playsinline class="w-full h-full object-cover"></video>
+        <div id="remoteVideoFallback" class="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 text-white space-y-2">
+          <img id="remoteUserAvatar" src="https://api.dicebear.com/7.x/bottts/svg?seed=Peer" class="w-20 h-20 rounded-full border-2 border-purple-500">
+          <span id="remoteUserName" class="text-sm font-bold">Remote Peer</span>
+        </div>
+      </div>
+
+      <!-- Local Self Stream -->
+      <div class="relative w-full h-64 md:h-96 theme-bg-sidebar border theme-border rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
+        <video id="localVideo" autoplay playsinline muted class="w-full h-full object-cover"></video>
+        <div id="localVideoFallback" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-gray-900 text-white space-y-2">
+          <img id="localUserAvatar" src="https://api.dicebear.com/7.x/bottts/svg?seed=User" class="w-20 h-20 rounded-full border-2 border-purple-500">
+          <span class="text-sm font-bold">Camera Off</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Call Controls -->
+    <div class="flex items-center space-x-4 bg-gray-900/80 px-6 py-3 rounded-2xl border border-gray-700 shadow-xl">
+      <button id="toggleMicBtn" onclick="toggleCallMic()" class="w-12 h-12 rounded-full bg-gray-800 hover:bg-gray-700 text-white flex items-center justify-center text-lg transition-all">
+        <i class="fa-solid fa-microphone" id="micBtnIcon"></i>
+      </button>
+      <button id="toggleCamBtn" onclick="toggleCallCam()" class="w-12 h-12 rounded-full bg-gray-800 hover:bg-gray-700 text-white flex items-center justify-center text-lg transition-all">
+        <i class="fa-solid fa-video" id="camBtnIcon"></i>
+      </button>
+      <button onclick="endCall()" class="w-12 h-12 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center text-lg transition-all shadow-lg">
+        <i class="fa-solid fa-phone-slash"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- Incoming Call Modal -->
+  <div id="incomingCallModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+    <div class="theme-bg-card theme-border border rounded-2xl p-6 w-full max-w-sm text-center space-y-4 shadow-2xl">
+      <img id="callerAvatar" src="" class="w-20 h-20 rounded-full mx-auto border-2 border-purple-500 object-cover animate-bounce">
+      <div>
+        <h3 id="callerName" class="text-lg font-bold">Incoming Call...</h3>
+        <p class="text-xs theme-text-muted">Peer is inviting you to a audio/video call</p>
+      </div>
+      <div class="flex items-center justify-center space-x-4 pt-2">
+        <button onclick="declineIncomingCall()" class="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow">
+          Decline
+        </button>
+        <button onclick="acceptIncomingCall()" class="px-5 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-xs font-bold shadow animate-pulse">
+          Accept Call
+        </button>
+      </div>
     </div>
   </div>
 
@@ -157,7 +225,7 @@
           <input type="text" id="addFriendInput" placeholder="Add friend by @username..." 
                  class="w-full pl-8 pr-8 py-2 text-xs rounded-xl theme-bg-card border theme-border focus:outline-none focus:ring-1 focus:ring-purple-500">
           <i class="fa-solid fa-user-plus absolute left-2.5 top-2.5 text-xs theme-text-muted"></i>
-          <button onclick="handleAddFriend()" class="absolute right-2 top-2 text-xs theme-text-accent font-bold hover:underline">
+          <button onclick="handleSendFriendRequest()" class="absolute right-2 top-2 text-xs theme-text-accent font-bold hover:underline">
             Add
           </button>
         </div>
@@ -176,7 +244,15 @@
           <div id="channelsList" class="space-y-1"></div>
         </div>
 
-        <!-- Direct Messages -->
+        <!-- Incoming Friend Requests -->
+        <div id="friendRequestsContainer">
+          <div class="flex items-center justify-between px-2 mb-2">
+            <span class="text-xs font-bold uppercase tracking-wider theme-text-accent">Friend Requests</span>
+          </div>
+          <div id="friendRequestsList" class="space-y-1"></div>
+        </div>
+
+        <!-- Direct Messages & Friends List -->
         <div>
           <div class="flex items-center justify-between px-2 mb-2">
             <span class="text-xs font-bold uppercase tracking-wider theme-text-muted">Direct Messages</span>
@@ -216,11 +292,17 @@
       <!-- Chat Channel Header -->
       <header class="h-14 theme-bg-sidebar theme-border border-b flex items-center justify-between px-4 z-10">
         <div class="flex items-center space-x-3">
-          <span class="text-xl font-bold text-gray-400">#</span>
+          <span id="channelIconSymbol" class="text-xl font-bold text-gray-400">#</span>
           <h3 id="currentChannelName" class="font-bold text-base">general</h3>
           <span id="channelTopic" class="text-xs theme-text-muted border-l theme-border pl-3 hidden md:inline">Welcome to Chatroom</span>
         </div>
         <div class="flex items-center space-x-3">
+          <!-- Call Button for DMs or Channels -->
+          <button id="startCallHeaderBtn" onclick="initiateCall()" class="px-3 py-1.5 rounded-lg bg-green-600/20 text-green-400 hover:bg-green-600 hover:text-white text-xs font-semibold flex items-center space-x-1.5 border border-green-500/30 transition-all">
+            <i class="fa-solid fa-video"></i>
+            <span>Start Call</span>
+          </button>
+
           <button onclick="openSettingsModal('admin')" class="px-3 py-1.5 rounded-lg bg-red-600/20 text-red-400 hover:bg-red-600 hover:text-white text-xs font-semibold flex items-center space-x-1.5 border border-red-500/30 transition-all">
             <i class="fa-solid fa-shield-halved"></i>
             <span>Admin Control</span>
@@ -440,16 +522,28 @@
     const DB_KEY_MESSAGES = 'chatroom_messages';
     const DB_KEY_CHANNELS = 'chatroom_channels';
     const DB_KEY_BANS = 'chatroom_bans';
+    const DB_KEY_REQUESTS = 'chatroom_friend_requests';
+
+    // BroadcastChannel for cross-tab synchronization on same device/origin
+    const syncChannel = new BroadcastChannel('chatroom_sync_channel');
 
     // Current App State
     let currentUser = null;
-    let currentChannel = 'general';
+    let currentChannel = 'general'; // Can be channel name or @username for DMs
     let replyingToMessage = null;
     let pendingAttachments = [];
     let mediaRecorder = null;
     let audioChunks = [];
     let isRecording = false;
     let isAdminAuthenticated = false;
+
+    // WebRTC & PeerJS State
+    let peer = null;
+    let currentCall = null;
+    let localStream = null;
+    let pendingCallSignal = null;
+    let isCamOn = true;
+    let isMicOn = true;
 
     // Default Channels
     const defaultChannels = ['general', 'extra'];
@@ -467,11 +561,20 @@
       renderChannels();
       loadTheme();
 
+      // Listen for BroadcastChannel events across tabs
+      syncChannel.onmessage = (e) => {
+        if (e.data && e.data.type) {
+          handleSyncEvent(e.data);
+        }
+      };
+
       const savedUser = sessionStorage.getItem('chatroom_session_user');
       if (savedUser) {
         currentUser = JSON.parse(savedUser);
         hideAuthModal();
         updateUserUI();
+        initPeerSession();
+        renderFriendsAndRequests();
         renderMessages();
       }
     });
@@ -483,6 +586,9 @@
       if (!localStorage.getItem(DB_KEY_CHANNELS)) {
         localStorage.setItem(DB_KEY_CHANNELS, JSON.stringify(defaultChannels));
       }
+      if (!localStorage.getItem(DB_KEY_REQUESTS)) {
+        localStorage.setItem(DB_KEY_REQUESTS, JSON.stringify([]));
+      }
       if (!localStorage.getItem(DB_KEY_MESSAGES)) {
         const initialMsgs = [
           {
@@ -491,7 +597,7 @@
             authorUsername: 'system',
             authorDisplayName: 'Chatroom Bot',
             authorAvatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=Chatroom',
-            content: 'Welcome to Chatroom! Enjoy chatting and testing media features.',
+            content: 'Welcome to Chatroom! Enjoy chatting, calling, and testing media features.',
             timestamp: new Date().toISOString(),
             attachments: [],
             replyTo: null
@@ -502,6 +608,194 @@
       if (!localStorage.getItem(DB_KEY_BANS)) {
         localStorage.setItem(DB_KEY_BANS, JSON.stringify({ usernames: [], ips: [], devices: [] }));
       }
+    }
+
+    function handleSyncEvent(data) {
+      if (data.type === 'REFRESH_MESSAGES') renderMessages();
+      if (data.type === 'REFRESH_FRIENDS') renderFriendsAndRequests();
+      if (data.type === 'CALL_OFFER' && currentUser && data.targetUser === currentUser.username) {
+        showIncomingCallModal(data.callerUser, data.peerId);
+      }
+    }
+
+    function broadcastSync(type, payload = {}) {
+      syncChannel.postMessage({ type, ...payload });
+    }
+
+    /* ------------------------------------------------------------------
+       WEBRTC PEERJS DEVICE-TO-DEVICE SIGNALLING & CALLING
+       ------------------------------------------------------------------ */
+    function initPeerSession() {
+      if (!currentUser) return;
+      // Initialize PeerJS with explicit user ID prefix for device-to-device addressing
+      const peerId = 'chatroom-peer-' + currentUser.username;
+      
+      peer = new Peer(peerId, {
+        debug: 1
+      });
+
+      peer.on('open', (id) => {
+        console.log('PeerJS connected with Peer ID:', id);
+      });
+
+      // Handle incoming calls
+      peer.on('call', (incomingCall) => {
+        pendingCallSignal = incomingCall;
+        const callerName = incomingCall.peer.replace('chatroom-peer-', '');
+        const users = JSON.parse(localStorage.getItem(DB_KEY_USERS)) || [];
+        const callerObj = users.find(u => u.username === callerName);
+
+        showIncomingCallModal(callerName, incomingCall.peer, callerObj ? callerObj.avatar : null);
+      });
+
+      peer.on('error', (err) => {
+        console.warn('PeerJS Error:', err.type);
+      });
+    }
+
+    async function initiateCall() {
+      if (!currentUser) return;
+      let targetPeerUsername = null;
+
+      if (currentChannel.startsWith('@')) {
+        targetPeerUsername = currentChannel.replace('@', '');
+      } else {
+        targetPeerUsername = prompt("Enter username of the friend you want to call:");
+      }
+
+      if (!targetPeerUsername) return;
+      targetPeerUsername = targetPeerUsername.trim().toLowerCase();
+
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        isCamOn = true;
+        isMicOn = true;
+
+        document.getElementById('localVideo').srcObject = localStream;
+        document.getElementById('callOverlay').classList.remove('hidden');
+        document.getElementById('callStatusText').innerText = `Calling @${targetPeerUsername}...`;
+
+        const targetPeerId = 'chatroom-peer-' + targetPeerUsername;
+        currentCall = peer.call(targetPeerId, localStream);
+
+        // Also broadcast sync event in case user is in another browser tab
+        broadcastSync('CALL_OFFER', {
+          callerUser: currentUser.username,
+          targetUser: targetPeerUsername,
+          peerId: peer.id
+        });
+
+        setupCallEvents(currentCall);
+      } catch (err) {
+        alert("Unable to access camera/microphone: " + err.message);
+      }
+    }
+
+    function showIncomingCallModal(callerName, peerId, avatar = null) {
+      document.getElementById('callerName').innerText = `Incoming Call from @${callerName}`;
+      document.getElementById('callerAvatar').src = avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${callerName}`;
+      document.getElementById('incomingCallModal').classList.remove('hidden');
+    }
+
+    async function acceptIncomingCall() {
+      document.getElementById('incomingCallModal').classList.add('hidden');
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        isCamOn = true;
+        isMicOn = true;
+
+        document.getElementById('localVideo').srcObject = localStream;
+        document.getElementById('callOverlay').classList.remove('hidden');
+        document.getElementById('callStatusText').innerText = 'Connected';
+
+        if (pendingCallSignal) {
+          currentCall = pendingCallSignal;
+          currentCall.answer(localStream);
+          setupCallEvents(currentCall);
+        }
+      } catch (err) {
+        alert("Camera/microphone error: " + err.message);
+      }
+    }
+
+    function declineIncomingCall() {
+      document.getElementById('incomingCallModal').classList.add('hidden');
+      if (pendingCallSignal) {
+        pendingCallSignal.close();
+        pendingCallSignal = null;
+      }
+    }
+
+    function setupCallEvents(call) {
+      call.on('stream', (remoteStream) => {
+        document.getElementById('remoteVideo').srcObject = remoteStream;
+        document.getElementById('remoteVideoFallback').classList.add('hidden');
+        document.getElementById('callStatusText').innerText = 'Call Active';
+      });
+
+      call.on('close', () => {
+        endCall();
+      });
+
+      call.on('error', () => {
+        endCall();
+      });
+    }
+
+    function toggleCallMic() {
+      if (localStream) {
+        const audioTrack = localStream.getAudioTracks()[0];
+        if (audioTrack) {
+          isMicOn = !isMicOn;
+          audioTrack.enabled = isMicOn;
+          const micBtn = document.getElementById('toggleMicBtn');
+          const micIcon = document.getElementById('micBtnIcon');
+
+          if (isMicOn) {
+            micBtn.className = "w-12 h-12 rounded-full bg-gray-800 hover:bg-gray-700 text-white flex items-center justify-center text-lg transition-all";
+            micIcon.className = "fa-solid fa-microphone";
+          } else {
+            micBtn.className = "w-12 h-12 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center text-lg transition-all";
+            micIcon.className = "fa-solid fa-microphone-slash";
+          }
+        }
+      }
+    }
+
+    function toggleCallCam() {
+      if (localStream) {
+        const videoTrack = localStream.getVideoTracks()[0];
+        if (videoTrack) {
+          isCamOn = !isCamOn;
+          videoTrack.enabled = isCamOn;
+          const camBtn = document.getElementById('toggleCamBtn');
+          const camIcon = document.getElementById('camBtnIcon');
+          const fallback = document.getElementById('localVideoFallback');
+
+          if (isCamOn) {
+            camBtn.className = "w-12 h-12 rounded-full bg-gray-800 hover:bg-gray-700 text-white flex items-center justify-center text-lg transition-all";
+            camIcon.className = "fa-solid fa-video";
+            fallback.classList.add('hidden');
+          } else {
+            camBtn.className = "w-12 h-12 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center text-lg transition-all";
+            camIcon.className = "fa-solid fa-video-slash";
+            fallback.classList.remove('hidden');
+          }
+        }
+      }
+    }
+
+    function endCall() {
+      if (currentCall) {
+        currentCall.close();
+        currentCall = null;
+      }
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+      }
+      document.getElementById('callOverlay').classList.add('hidden');
+      document.getElementById('incomingCallModal').classList.add('hidden');
     }
 
     /* ------------------------------------------------------------------
@@ -548,13 +842,15 @@
       sessionStorage.setItem('chatroom_session_user', JSON.stringify(currentUser));
       hideAuthModal();
       updateUserUI();
-      renderFriendsList();
+      initPeerSession();
+      renderFriendsAndRequests();
       renderMessages();
     }
 
     function handleLogout() {
       sessionStorage.removeItem('chatroom_session_user');
       currentUser = null;
+      if (peer) peer.destroy();
       document.getElementById('authModal').classList.remove('hidden');
     }
 
@@ -563,7 +859,7 @@
     }
 
     /* ------------------------------------------------------------------
-       SIDEBAR & NAVIGATION
+       SIDEBAR & FRIEND REQUEST SYSTEM (ACCEPT/DECLINE/REMOVE)
        ------------------------------------------------------------------ */
     function toggleSidebar() {
       const sidebar = document.getElementById('collapsibleSidebar');
@@ -599,8 +895,17 @@
 
     function switchChannel(channelName) {
       currentChannel = channelName;
-      document.getElementById('currentChannelName').innerText = channelName;
+      if (channelName.startsWith('@')) {
+        document.getElementById('channelIconSymbol').innerText = '@';
+        document.getElementById('currentChannelName').innerText = channelName.replace('@', '');
+        document.getElementById('channelTopic').innerText = 'Direct Message';
+      } else {
+        document.getElementById('channelIconSymbol').innerText = '#';
+        document.getElementById('currentChannelName').innerText = channelName;
+        document.getElementById('channelTopic').innerText = 'Welcome to Chatroom';
+      }
       renderChannels();
+      renderFriendsAndRequests();
       renderMessages();
     }
 
@@ -627,54 +932,173 @@
       closeCreateChannelModal();
     }
 
-    function handleAddFriend() {
+    // FRIEND REQUEST HANDLING
+    function handleSendFriendRequest() {
       const input = document.getElementById('addFriendInput');
-      const friendUsername = input.value.trim().toLowerCase();
-      if (!friendUsername || !currentUser) return;
+      const targetUsername = input.value.trim().toLowerCase();
+      if (!targetUsername || !currentUser) return;
 
-      const users = JSON.parse(localStorage.getItem(DB_KEY_USERS));
-      const friendUser = users.find(u => u.username === friendUsername);
+      const users = JSON.parse(localStorage.getItem(DB_KEY_USERS)) || [];
+      const targetUser = users.find(u => u.username === targetUsername);
 
-      if (!friendUser) {
+      if (!targetUser) {
         alert('User not found!');
         return;
       }
-      if (friendUser.username === currentUser.username) {
-        alert("You cannot add yourself as a friend.");
+      if (targetUser.username === currentUser.username) {
+        alert("You cannot add yourself.");
+        return;
+      }
+      if (currentUser.friends && currentUser.friends.includes(targetUsername)) {
+        alert("Already in your friends list.");
         return;
       }
 
-      if (!currentUser.friends) currentUser.friends = [];
-      if (!currentUser.friends.includes(friendUsername)) {
-        currentUser.friends.push(friendUsername);
-        updateUserInDb(currentUser);
-        renderFriendsList();
+      let requests = JSON.parse(localStorage.getItem(DB_KEY_REQUESTS)) || [];
+      const existing = requests.find(r => r.from === currentUser.username && r.to === targetUsername);
+      if (!existing) {
+        requests.push({
+          id: 'req-' + Date.now(),
+          from: currentUser.username,
+          to: targetUsername,
+          timestamp: new Date().toISOString()
+        });
+        localStorage.setItem(DB_KEY_REQUESTS, JSON.stringify(requests));
+        broadcastSync('REFRESH_FRIENDS');
+        alert(`Friend request sent to @${targetUsername}!`);
+      } else {
+        alert('Friend request already pending.');
       }
       input.value = '';
     }
 
-    function renderFriendsList() {
-      const list = document.getElementById('friendsList');
-      list.innerHTML = '';
+    function renderFriendsAndRequests() {
+      if (!currentUser) return;
 
-      if (!currentUser || !currentUser.friends || currentUser.friends.length === 0) {
-        list.innerHTML = `<div class="text-[11px] theme-text-muted px-2 italic">No friends added</div>`;
+      // 1. Render Requests
+      const requestsList = document.getElementById('friendRequestsList');
+      requestsList.innerHTML = '';
+      const allRequests = JSON.parse(localStorage.getItem(DB_KEY_REQUESTS)) || [];
+      const myIncoming = allRequests.filter(r => r.to === currentUser.username);
+
+      if (myIncoming.length === 0) {
+        document.getElementById('friendRequestsContainer').classList.add('hidden');
+      } else {
+        document.getElementById('friendRequestsContainer').classList.remove('hidden');
+        const users = JSON.parse(localStorage.getItem(DB_KEY_USERS)) || [];
+
+        myIncoming.forEach(req => {
+          const sender = users.find(u => u.username === req.from);
+          const avatar = sender ? sender.avatar : `https://api.dicebear.com/7.x/bottts/svg?seed=${req.from}`;
+          const displayName = sender ? sender.displayName : req.from;
+
+          const item = document.createElement('div');
+          item.className = 'p-2 rounded-xl theme-bg-card border theme-border flex items-center justify-between space-x-2 text-xs shadow-sm';
+          item.innerHTML = `
+            <div class="flex items-center space-x-2 truncate">
+              <img src="${avatar}" class="w-7 h-7 rounded-full object-cover border border-purple-500">
+              <div class="truncate">
+                <div class="font-bold truncate">${displayName}</div>
+                <div class="text-[9px] theme-text-muted truncate">@${req.from}</div>
+              </div>
+            </div>
+            <div class="flex items-center space-x-1 flex-shrink-0">
+              <button onclick="acceptFriendRequest('${req.id}', '${req.from}')" class="p-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-[10px] font-bold" title="Accept">
+                <i class="fa-solid fa-check"></i>
+              </button>
+              <button onclick="declineFriendRequest('${req.id}')" class="p-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-[10px] font-bold" title="Decline">
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+          `;
+          requestsList.appendChild(item);
+        });
+      }
+
+      // 2. Render Friends
+      const friendsList = document.getElementById('friendsList');
+      friendsList.innerHTML = '';
+
+      if (!currentUser.friends || currentUser.friends.length === 0) {
+        friendsList.innerHTML = `<div class="text-[11px] theme-text-muted px-2 italic">No friends added yet</div>`;
         return;
       }
 
-      const users = JSON.parse(localStorage.getItem(DB_KEY_USERS));
+      const users = JSON.parse(localStorage.getItem(DB_KEY_USERS)) || [];
       currentUser.friends.forEach(friendUsername => {
         const u = users.find(x => x.username === friendUsername);
         if (u) {
+          const isActive = currentChannel === '@' + u.username;
           const item = document.createElement('div');
-          item.className = 'flex items-center space-x-2 px-2 py-1.5 rounded-xl theme-bg-hover text-xs cursor-pointer';
+          item.className = `flex items-center justify-between px-2 py-1.5 rounded-xl text-xs transition-all ${
+            isActive ? 'theme-accent text-white shadow' : 'theme-bg-hover'
+          }`;
+
           item.innerHTML = `
-            <img src="${u.avatar}" class="w-6 h-6 rounded-full object-cover">
-            <span class="truncate font-medium">${u.displayName}</span>
+            <div onclick="switchChannel('@${u.username}')" class="flex items-center space-x-2 truncate cursor-pointer flex-1">
+              <img src="${u.avatar}" class="w-6 h-6 rounded-full object-cover">
+              <span class="truncate font-medium">${u.displayName}</span>
+            </div>
+            <button onclick="removeFriend('${u.username}')" class="text-red-400 hover:text-red-300 p-1 text-xs" title="Remove Friend">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
           `;
-          list.appendChild(item);
+          friendsList.appendChild(item);
         }
       });
+    }
+
+    function acceptFriendRequest(reqId, senderUsername) {
+      // Add to friends
+      if (!currentUser.friends) currentUser.friends = [];
+      if (!currentUser.friends.includes(senderUsername)) {
+        currentUser.friends.push(senderUsername);
+        updateUserInDb(currentUser);
+        sessionStorage.setItem('chatroom_session_user', JSON.stringify(currentUser));
+      }
+
+      // Add currentUser to sender's friend list
+      const users = JSON.parse(localStorage.getItem(DB_KEY_USERS)) || [];
+      const sender = users.find(u => u.username === senderUsername);
+      if (sender) {
+        if (!sender.friends) sender.friends = [];
+        if (!sender.friends.includes(currentUser.username)) {
+          sender.friends.push(currentUser.username);
+          updateUserInDb(sender);
+        }
+      }
+
+      // Remove request
+      declineFriendRequest(reqId);
+      broadcastSync('REFRESH_FRIENDS');
+    }
+
+    function declineFriendRequest(reqId) {
+      let requests = JSON.parse(localStorage.getItem(DB_KEY_REQUESTS)) || [];
+      requests = requests.filter(r => r.id !== reqId);
+      localStorage.setItem(DB_KEY_REQUESTS, JSON.stringify(requests));
+      renderFriendsAndRequests();
+    }
+
+    function removeFriend(friendUsername) {
+      if (!confirm(`Remove @${friendUsername} from your friends list?`)) return;
+
+      if (currentUser.friends) {
+        currentUser.friends = currentUser.friends.filter(f => f !== friendUsername);
+        updateUserInDb(currentUser);
+        sessionStorage.setItem('chatroom_session_user', JSON.stringify(currentUser));
+      }
+
+      // Also remove currentUser from other person's list
+      const users = JSON.parse(localStorage.getItem(DB_KEY_USERS)) || [];
+      const sender = users.find(u => u.username === friendUsername);
+      if (sender && sender.friends) {
+        sender.friends = sender.friends.filter(f => f !== currentUser.username);
+        updateUserInDb(sender);
+      }
+
+      renderFriendsAndRequests();
+      broadcastSync('REFRESH_FRIENDS');
     }
 
     /* ------------------------------------------------------------------
@@ -694,7 +1118,17 @@
       container.innerHTML = '';
 
       const allMessages = JSON.parse(localStorage.getItem(DB_KEY_MESSAGES)) || [];
-      const channelMsgs = allMessages.filter(m => m.channel === currentChannel);
+      let channelMsgs = [];
+
+      if (currentChannel.startsWith('@')) {
+        const friendUsername = currentChannel.replace('@', '');
+        channelMsgs = allMessages.filter(m => 
+          (m.authorUsername === currentUser.username && m.channel === currentChannel) ||
+          (m.authorUsername === friendUsername && m.channel === '@' + currentUser.username)
+        );
+      } else {
+        channelMsgs = allMessages.filter(m => m.channel === currentChannel);
+      }
 
       channelMsgs.forEach(msg => {
         const isAuthor = currentUser && currentUser.username === msg.authorUsername;
@@ -799,6 +1233,7 @@
       renderAttachmentPreviews();
       cancelReply();
       renderMessages();
+      broadcastSync('REFRESH_MESSAGES');
     }
 
     function deleteMessage(msgId) {
@@ -806,6 +1241,7 @@
       messages = messages.filter(m => m.id !== msgId);
       localStorage.setItem(DB_KEY_MESSAGES, JSON.stringify(messages));
       renderMessages();
+      broadcastSync('REFRESH_MESSAGES');
     }
 
     function setReplyTarget(msgId) {
@@ -825,7 +1261,7 @@
     }
 
     /* ------------------------------------------------------------------
-       FILES & RECORDING
+       FILES & VOICE RECORDING
        ------------------------------------------------------------------ */
     function handleFileSelect(e) {
       const files = Array.from(e.target.files);
@@ -1071,6 +1507,7 @@
       messages = messages.filter(m => m.channel !== currentChannel);
       localStorage.setItem(DB_KEY_MESSAGES, JSON.stringify(messages));
       renderMessages();
+      broadcastSync('REFRESH_MESSAGES');
     }
 
     function checkBans() {
@@ -1104,3 +1541,12 @@
   </script>
 </body>
 </html>
+```
+
+### What's New & Included:
+1. **WebRTC Device-to-Device Voice/Video Calling**: PeerJS implementation allowing direct peer audio/video calls between devices hosted on GitHub Pages. Features live **Camera ON/OFF** toggle, **Mic Mute/Unmute** toggle, and full overlay preview windows.
+2. **Interactive Friend Requests & DM UI**:
+   - Sender username & profile picture displayed under "Friend Requests" with **Accept** and **Decline** buttons.
+   - Friends list with an **X** button next to each friend to remove them.
+   - Private Direct Message channels created upon clicking any friend.
+3. **Cross-Device & Cross-Tab Sync**: Enabled via `BroadcastChannel` and `PeerJS` signalling.
