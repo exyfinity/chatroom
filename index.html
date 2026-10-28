@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <html lang="en" class="h-full">
 <head>
   <meta charset="UTF-8">
@@ -74,7 +73,7 @@
     .theme-text-muted { color: var(--text-muted); }
   </style>
 </head>
-<body class="h-full font-sans antialiased select-none overflow-hidden" data-theme="signal-dark">
+<body class="h-full font-sans antialiased select-none overflow-hidden" data-theme="signal-dark" onclick="closeContextMenu()">
 
   <!-- ================= AUTH MODAL ================= -->
   <div id="authModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm transition-opacity duration-300">
@@ -339,6 +338,34 @@
     </main>
   </div>
 
+  <!-- ================= RIGHT-CLICK CHANNEL CONTEXT MENU ================= -->
+  <div id="channelContextMenu" class="hidden fixed z-50 theme-bg-card theme-border border rounded-xl shadow-2xl py-1 text-xs w-48">
+    <button onclick="openInviteModalFromContext()" class="w-full text-left px-4 py-2 theme-bg-hover flex items-center space-x-2">
+      <i class="fa-solid fa-user-plus text-purple-400"></i>
+      <span>Invite Users</span>
+    </button>
+  </div>
+
+  <!-- ================= CHANNEL INVITE MODAL ================= -->
+  <div id="channelInviteModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+    <div class="theme-bg-card theme-border border rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl flex flex-col max-h-[80vh]">
+      <div class="flex items-center justify-between border-b theme-border pb-3">
+        <h3 class="text-base font-bold">Invite Users to <span id="inviteModalChannelName" class="theme-text-accent"></span></h3>
+        <button onclick="closeInviteModal()" class="text-xs theme-text-muted hover:text-white">
+          <i class="fa-solid fa-xmark text-base"></i>
+        </button>
+      </div>
+
+      <p class="text-xs theme-text-muted">Select any user to send an invitation card directly to their Direct Messages.</p>
+
+      <div id="inviteUserList" class="flex-1 overflow-y-auto space-y-2 pr-1"></div>
+
+      <div class="flex justify-end pt-2 border-t theme-border">
+        <button onclick="closeInviteModal()" class="px-4 py-2 rounded-xl text-xs theme-bg-hover font-semibold">Done</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ================= SETTINGS & ADMIN MODAL ================= -->
   <div id="settingsModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
     <div class="theme-bg-card theme-border border rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
@@ -516,6 +543,7 @@
       <div>
         <label class="block text-xs font-semibold mb-1 theme-text-muted">Channel Name</label>
         <input type="text" id="newChannelNameInput" placeholder="e.g. gaming" class="w-full text-xs px-3 py-2 rounded-xl theme-bg-sidebar border theme-border">
+        <p class="text-[10px] theme-text-muted mt-1.5">Note: Custom channels are private by default. Users must be invited via right-click to join.</p>
       </div>
       <div class="flex justify-end space-x-2">
         <button onclick="closeCreateChannelModal()" class="px-3 py-1.5 rounded-xl text-xs theme-bg-hover">Cancel</button>
@@ -540,7 +568,10 @@
     const DB_KEY_REQUESTS = 'chatroom_friend_requests';
     const DB_KEY_UNREADS = 'chatroom_unread_counts';
 
-    const defaultChannels = ['general', 'extra'];
+    const defaultChannels = [
+      { name: 'general', isPrivate: false, members: [] },
+      { name: 'extra', isPrivate: false, members: [] }
+    ];
 
     // Realtime Sync Channel
     const broadcastChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('chatroom_sync') : { postMessage: () => {}, onmessage: null };
@@ -555,6 +586,7 @@
     let audioChunks = [];
     let isRecording = false;
     let isAdminAuthenticated = false;
+    let contextTargetChannel = null;
 
     // Devices, IPs & Simulated MAC
     const clientDeviceIp = "192.168.1." + Math.floor(Math.random() * 200 + 10);
@@ -562,12 +594,25 @@
     const clientDeviceId = "DEV-" + Math.random().toString(36).substring(2, 9).toUpperCase();
 
     /* ------------------------------------------------------------------
-       DATABASE INITIALIZATION
+       DATABASE INITIALIZATION & MIGRATION
        ------------------------------------------------------------------ */
     function initDatabase() {
       if (!localStorage.getItem(DB_KEY_CHANNELS)) {
         localStorage.setItem(DB_KEY_CHANNELS, JSON.stringify(defaultChannels));
+      } else {
+        // Upgrade legacy channel string formats to channel objects
+        try {
+          let raw = JSON.parse(localStorage.getItem(DB_KEY_CHANNELS));
+          if (Array.isArray(raw) && typeof raw[0] === 'string') {
+            let migrated = raw.map(chName => {
+              const isDefault = (chName === 'general' || chName === 'extra');
+              return { name: chName, isPrivate: !isDefault, members: [] };
+            });
+            localStorage.setItem(DB_KEY_CHANNELS, JSON.stringify(migrated));
+          }
+        } catch(e) {}
       }
+
       if (!localStorage.getItem(DB_KEY_USERS)) {
         localStorage.setItem(DB_KEY_USERS, JSON.stringify([]));
       }
@@ -624,15 +669,23 @@
     window.addEventListener('DOMContentLoaded', () => {
       initDatabase();
       checkBans();
-      renderChannels();
       loadTheme();
 
       const savedUser = sessionStorage.getItem('chatroom_session_user');
       if (savedUser) {
         try {
-          currentUser = JSON.parse(savedUser);
+          const parsed = JSON.parse(savedUser);
+          // Sync with DB account state to retain persistent Admin status
+          const users = JSON.parse(localStorage.getItem(DB_KEY_USERS)) || [];
+          currentUser = users.find(u => u.username === parsed.username) || parsed;
+          
+          if (currentUser.isAdmin) {
+            isAdminAuthenticated = true;
+          }
+
           hideAuthModal();
           updateUserUI();
+          renderChannels();
           renderFriendsList();
           renderFriendRequests();
           renderMessages();
@@ -640,6 +693,8 @@
           console.error("Failed to parse saved user session:", e);
           sessionStorage.removeItem('chatroom_session_user');
         }
+      } else {
+        renderChannels();
       }
 
       broadcastChannel.onmessage = (event) => {
@@ -648,6 +703,8 @@
         } else if (event.data && event.data.type === 'FRIEND_UPDATE') {
           renderFriendsList();
           renderFriendRequests();
+        } else if (event.data && event.data.type === 'CHANNEL_UPDATE') {
+          renderChannels();
         }
       };
     });
@@ -673,21 +730,150 @@
       const channels = JSON.parse(localStorage.getItem(DB_KEY_CHANNELS)) || defaultChannels;
 
       channels.forEach(ch => {
-        const activeClass = (currentChatType === 'channel' && currentChannel === ch) 
-          ? 'theme-bg-hover font-bold text-white' 
-          : 'theme-text-muted hover:text-white';
-        
-        const item = document.createElement('button');
-        item.className = `w-full text-left px-3 py-2 rounded-xl text-xs flex items-center justify-between transition-all ${activeClass}`;
-        item.onclick = () => switchChannel(ch, 'channel');
-        item.innerHTML = `
-          <div class="flex items-center space-x-2 truncate">
-            <span class="text-sm">#</span>
-            <span class="truncate">${ch}</span>
-          </div>
-        `;
-        container.appendChild(item);
+        const isPublic = !ch.isPrivate;
+        const isMember = currentUser && ch.members && ch.members.includes(currentUser.username);
+        const isAdmin = currentUser && currentUser.isAdmin;
+
+        // Render channel if public, or if user is member/admin
+        if (isPublic || isMember || isAdmin) {
+          const activeClass = (currentChatType === 'channel' && currentChannel === ch.name) 
+            ? 'theme-bg-hover font-bold text-white' 
+            : 'theme-text-muted hover:text-white';
+          
+          const item = document.createElement('button');
+          item.className = `w-full text-left px-3 py-2 rounded-xl text-xs flex items-center justify-between transition-all ${activeClass}`;
+          item.onclick = () => switchChannel(ch.name, 'channel');
+          
+          // Attach Right-Click Context Menu event to channels
+          item.oncontextmenu = (e) => openChannelContextMenu(e, ch.name);
+
+          item.innerHTML = `
+            <div class="flex items-center space-x-2 truncate">
+              <span class="text-sm">${ch.isPrivate ? '<i class="fa-solid fa-lock text-[11px] text-amber-400"></i>' : '#'}</span>
+              <span class="truncate">${ch.name}</span>
+            </div>
+          `;
+          container.appendChild(item);
+        }
       });
+    }
+
+    /* CONTEXT MENU & CHANNEL INVITES */
+    function openChannelContextMenu(e, channelName) {
+      e.preventDefault();
+      contextTargetChannel = channelName;
+      const menu = document.getElementById('channelContextMenu');
+      menu.style.top = `${e.clientY}px`;
+      menu.style.left = `${e.clientX}px`;
+      menu.classList.remove('hidden');
+    }
+
+    function closeContextMenu() {
+      const menu = document.getElementById('channelContextMenu');
+      if (menu) menu.classList.add('hidden');
+    }
+
+    function openInviteModalFromContext() {
+      closeContextMenu();
+      if (!contextTargetChannel) return;
+
+      document.getElementById('inviteModalChannelName').innerText = '#' + contextTargetChannel;
+      document.getElementById('channelInviteModal').classList.remove('hidden');
+      renderInviteUserList();
+    }
+
+    function closeInviteModal() {
+      document.getElementById('channelInviteModal').classList.add('hidden');
+      contextTargetChannel = null;
+    }
+
+    function renderInviteUserList() {
+      const container = document.getElementById('inviteUserList');
+      container.innerHTML = '';
+
+      const users = JSON.parse(localStorage.getItem(DB_KEY_USERS)) || [];
+      const channels = JSON.parse(localStorage.getItem(DB_KEY_CHANNELS)) || [];
+      const chObj = channels.find(c => c.name === contextTargetChannel);
+
+      const otherUsers = users.filter(u => currentUser && u.username !== currentUser.username);
+
+      if (otherUsers.length === 0) {
+        container.innerHTML = `<div class="text-xs theme-text-muted italic py-4 text-center">No other registered users found.</div>`;
+        return;
+      }
+
+      otherUsers.forEach(u => {
+        const isAlreadyMember = chObj && chObj.members && chObj.members.includes(u.username);
+
+        const div = document.createElement('div');
+        div.className = 'flex items-center justify-between p-2.5 rounded-xl theme-bg-sidebar border theme-border text-xs';
+        div.innerHTML = `
+          <div class="flex items-center space-x-2.5 truncate">
+            <img src="${u.avatar}" class="w-7 h-7 rounded-full object-cover">
+            <div class="truncate">
+              <div class="font-bold truncate">${u.displayName}</div>
+              <div class="text-[10px] theme-text-muted truncate">@${u.username}</div>
+            </div>
+          </div>
+          ${isAlreadyMember ? `
+            <span class="text-[10px] text-green-400 font-bold px-2 py-1 bg-green-950/40 border border-green-800/40 rounded-lg">Member</span>
+          ` : `
+            <button onclick="sendChannelInvite('${u.username}')" class="px-3 py-1.5 theme-accent text-white rounded-lg text-xs font-bold shadow hover:opacity-90">
+              Invite
+            </button>
+          `}
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    function sendChannelInvite(targetUsername) {
+      if (!currentUser || !contextTargetChannel) return;
+
+      const targetKey = getDmKey(currentUser.username, targetUsername);
+
+      // Create invite payload message with custom join action tag
+      const inviteText = `INVITE_CARD:${contextTargetChannel}`;
+      const encryptedContent = encryptMessage(inviteText);
+
+      const newMsg = {
+        id: 'msg-' + Date.now(),
+        channel: targetKey,
+        authorUsername: currentUser.username,
+        authorDisplayName: currentUser.displayName,
+        authorAvatar: currentUser.avatar,
+        content: encryptedContent,
+        timestamp: new Date().toISOString(),
+        attachments: [],
+        replyTo: null
+      };
+
+      const messages = JSON.parse(localStorage.getItem(DB_KEY_MESSAGES)) || [];
+      messages.push(newMsg);
+      localStorage.setItem(DB_KEY_MESSAGES, JSON.stringify(messages));
+
+      broadcastChannel.postMessage({ type: 'NEW_MESSAGE', data: { channel: targetKey } });
+      alert(`Sent an invite to @${targetUsername} for channel #${contextTargetChannel}`);
+      renderInviteUserList();
+    }
+
+    function acceptChannelInvite(channelName) {
+      if (!currentUser) return;
+
+      const channels = JSON.parse(localStorage.getItem(DB_KEY_CHANNELS)) || [];
+      const ch = channels.find(c => c.name === channelName);
+
+      if (ch) {
+        if (!ch.members) ch.members = [];
+        if (!ch.members.includes(currentUser.username)) {
+          ch.members.push(currentUser.username);
+          localStorage.setItem(DB_KEY_CHANNELS, JSON.stringify(channels));
+          broadcastChannel.postMessage({ type: 'CHANNEL_UPDATE' });
+        }
+        renderChannels();
+        switchChannel(channelName, 'channel');
+        alert(`Joined channel #${channelName}!`);
+      }
     }
 
     function switchChannel(name, type) {
@@ -799,7 +985,16 @@
 
       if (tab === 'profile') document.getElementById('tabContentProfile').classList.remove('hidden');
       if (tab === 'themes') document.getElementById('tabContentThemes').classList.remove('hidden');
-      if (tab === 'admin') document.getElementById('tabContentAdmin').classList.remove('hidden');
+      if (tab === 'admin') {
+        document.getElementById('tabContentAdmin').classList.remove('hidden');
+        if (isAdminAuthenticated) {
+          document.getElementById('adminAuthSection').classList.add('hidden');
+          document.getElementById('adminControlsSection').classList.remove('hidden');
+          renderAdminUsersTable();
+          renderAdminUnbanList();
+          renderOwnerAdminRevokeList();
+        }
+      }
     }
 
     function updatePfpPreview() {
@@ -1044,7 +1239,7 @@
           username: usernameInput,
           password: passwordInput,
           displayName: usernameInput.charAt(0).toUpperCase() + usernameInput.slice(1),
-          bio: "", // DEFAULT BLANK BIO
+          bio: "", 
           avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${usernameInput}`,
           ip: clientDeviceIp,
           mac: clientMacAddress,
@@ -1057,9 +1252,12 @@
       }
 
       currentUser = user;
+      if (currentUser.isAdmin) isAdminAuthenticated = true;
+
       sessionStorage.setItem('chatroom_session_user', JSON.stringify(currentUser));
       hideAuthModal();
       updateUserUI();
+      renderChannels();
       renderFriendsList();
       renderFriendRequests();
       renderMessages();
@@ -1158,6 +1356,27 @@
           `;
         }
 
+        // Render Channel Invite Card Feature
+        let bodyMarkup = '';
+        if (decryptedText.startsWith('INVITE_CARD:')) {
+          const chName = decryptedText.split('INVITE_CARD:')[1];
+          bodyMarkup = `
+            <div class="p-4 rounded-2xl theme-bg-card border theme-border space-y-3 max-w-sm mt-1 shadow-lg">
+              <div class="flex items-center space-x-2 font-bold text-sm">
+                <i class="fa-solid fa-hashtag theme-text-accent"></i>
+                <span>Private Channel Invitation</span>
+              </div>
+              <p class="text-xs theme-text-muted">You have been invited to join the private channel <strong class="text-white">#${chName}</strong>.</p>
+              <button onclick="acceptChannelInvite('${chName}')" class="w-full py-2 theme-accent theme-accent-hover text-white rounded-xl font-bold text-xs shadow flex items-center justify-center space-x-2">
+                <i class="fa-solid fa-door-open"></i>
+                <span>Join #${chName}</span>
+              </button>
+            </div>
+          `;
+        } else {
+          bodyMarkup = `<div class="text-xs mt-1 break-words">${escapeHTML(decryptedText)}</div>`;
+        }
+
         let attachmentsMarkup = '';
         if (msg.attachments && msg.attachments.length > 0) {
           attachmentsMarkup = `<div class="mt-2 space-y-2">`;
@@ -1192,7 +1411,7 @@
               <span class="font-bold text-xs">${msg.authorDisplayName}</span>
               <span class="text-[10px] theme-text-muted">${formatTimestamp(msg.timestamp)}</span>
             </div>
-            <div class="text-xs mt-1 break-words">${escapeHTML(decryptedText)}</div>
+            ${bodyMarkup}
             ${attachmentsMarkup}
           </div>
 
@@ -1247,7 +1466,7 @@
       if (input === REQUIRED_ADMIN_PASSWORD) {
         isAdminAuthenticated = true;
 
-        // Grant persistent Admin status to current logged-in user
+        // Grant persistent Admin status to current logged-in user in DB
         if (currentUser) {
           currentUser.isAdmin = true;
           updateUserInDb(currentUser);
@@ -1260,6 +1479,7 @@
         renderAdminUnbanList();
         renderOwnerAdminRevokeList();
         updateUserUI();
+        renderChannels();
         renderMessages();
       } else {
         alert('Incorrect Admin Password');
@@ -1319,6 +1539,7 @@
 
         if (currentUser && currentUser.username === username) {
           currentUser.isAdmin = false;
+          isAdminAuthenticated = false;
           sessionStorage.setItem('chatroom_session_user', JSON.stringify(currentUser));
           updateUserUI();
         }
@@ -1497,8 +1718,10 @@
     function openCreateChannelModal() {
       document.getElementById('createChannelModal').classList.remove('hidden');
     }
+    
+    // Fixed Cancel Button Handler
     function closeCreateChannelModal() {
-      document.getElementById('createChannelModal').classList.remove('hidden');
+      document.getElementById('createChannelModal').classList.add('hidden');
     }
 
     function handleCreateChannel() {
@@ -1506,10 +1729,17 @@
       const channelName = input.value.trim().toLowerCase().replace(/\s+/g, '-');
       if (!channelName) return;
 
-      const channels = JSON.parse(localStorage.getItem(DB_KEY_CHANNELS)) || defaultChannels;
-      if (!channels.includes(channelName)) {
-        channels.push(channelName);
+      const channels = JSON.parse(localStorage.getItem(DB_KEY_CHANNELS)) || [];
+      if (!channels.some(c => c.name === channelName)) {
+        // User created channels are private by default
+        const newChan = {
+          name: channelName,
+          isPrivate: true,
+          members: [currentUser ? currentUser.username : '']
+        };
+        channels.push(newChan);
         localStorage.setItem(DB_KEY_CHANNELS, JSON.stringify(channels));
+        broadcastChannel.postMessage({ type: 'CHANNEL_UPDATE' });
         renderChannels();
         switchChannel(channelName, 'channel');
       }
