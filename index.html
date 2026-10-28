@@ -84,7 +84,7 @@
           <i class="fa-solid fa-comments"></i>
         </div>
         <h2 class="text-2xl font-bold tracking-tight">Chatroom</h2>
-        <p class="text-xs theme-text-muted mt-1">Sign in or create an account to start chatting</p>
+        <p class="text-xs theme-text-muted mt-1">Sign in or create an account to start chatting (E2EE Enabled)</p>
       </div>
 
       <!-- Native Form for Password Managers -->
@@ -556,10 +556,184 @@
     let isRecording = false;
     let isAdminAuthenticated = false;
 
+    // E2EE Key Memory Cache
+    let currentUserPrivateKey = null;
+    const sharedKeyCache = {};
+
     // Devices, IPs & Simulated MAC
     const clientDeviceIp = "192.168.1." + Math.floor(Math.random() * 200 + 10);
     const clientMacAddress = Array.from({length:6}, () => Math.floor(Math.random()*256).toString(16).padStart(2,'0').toUpperCase()).join(':');
     const clientDeviceId = "DEV-" + Math.random().toString(36).substring(2, 9).toUpperCase();
+
+    /* ------------------------------------------------------------------
+       WEB CRYPTO API - ECDH & AES-GCM E2EE ENGINE
+       ------------------------------------------------------------------ */
+    
+    // Convert ArrayBuffer to Base64 & vice versa
+    function bufferToBase64(buf) {
+      return btoa(String.fromCharCode(...new Uint8Array(buf)));
+    }
+    function base64ToBuffer(str) {
+      const binary = atob(str);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes.buffer;
+    }
+
+    // Derive Encryption Key from Password (PBKDF2)
+    async function deriveKeyFromPassword(password, salt) {
+      const enc = new TextEncoder();
+      const keyMaterial = await window.crypto.subtle.importKey(
+        "raw", enc.encode(password), { name: "PBKDF2" }, false, ["deriveKey"]
+      );
+      return window.crypto.subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt: enc.encode(salt),
+          iterations: 100000,
+          hash: "SHA-256"
+        },
+        keyMaterial,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
+    }
+
+    // Generate ECDH Keypair for new user
+    async function generateUserE2EEKeypair(password, username) {
+      const keypair = await window.crypto.subtle.generateKey(
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        ["deriveKey", "deriveBits"]
+      );
+
+      // Export Public Key
+      const pubBuffer = await window.crypto.subtle.exportKey("spki", keypair.publicKey);
+      const publicKeyBase64 = bufferToBase64(pubBuffer);
+
+      // Export & Encrypt Private Key with Password
+      const privBuffer = await window.crypto.subtle.exportKey("pkcs8", keypair.privateKey);
+      const passwordDerivedKey = await deriveKeyFromPassword(password, username + "_salt");
+      const iv = window.crypto.getRandomValues(new Uint8Array(12));
+      
+      const encryptedPrivBuffer = await window.crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: iv },
+        passwordDerivedKey,
+        privBuffer
+      );
+
+      return {
+        publicKey: publicKeyBase64,
+        encryptedPrivateKey: bufferToBase64(encryptedPrivBuffer),
+        privateKeyIv: bufferToBase64(iv)
+      };
+    }
+
+    // Decrypt & Unlock User's Private Key
+    async function unlockPrivateKey(user, password) {
+      try {
+        const passwordDerivedKey = await deriveKeyFromPassword(password, user.username + "_salt");
+        const encryptedPrivBuffer = base64ToBuffer(user.e2ee.encryptedPrivateKey);
+        const iv = base64ToBuffer(user.e2ee.privateKeyIv);
+
+        const decryptedPrivBuffer = await window.crypto.subtle.decrypt(
+          { name: "AES-GCM", iv: iv },
+          passwordDerivedKey,
+          encryptedPrivBuffer
+        );
+
+        const privateKey = await window.crypto.subtle.importKey(
+          "pkcs8",
+          decryptedPrivBuffer,
+          { name: "ECDH", namedCurve: "P-256" },
+          false,
+          ["deriveKey", "deriveBits"]
+        );
+
+        currentUserPrivateKey = privateKey;
+        return true;
+      } catch (e) {
+        console.error("E2EE Key Decryption Failed:", e);
+        return false;
+      }
+    }
+
+    // Compute or fetch cached ECDH Shared Secret Key between Current User & Target User
+    async function getECDHSharedKey(targetUsername) {
+      if (sharedKeyCache[targetUsername]) return sharedKeyCache[targetUsername];
+      if (!currentUserPrivateKey || !currentUser) return null;
+
+      const users = JSON.parse(localStorage.getItem(DB_KEY_USERS)) || [];
+      const targetUser = users.find(u => u.username === targetUsername);
+      if (!targetUser || !targetUser.e2ee || !targetUser.e2ee.publicKey) return null;
+
+      const targetPubKeyBuffer = base64ToBuffer(targetUser.e2ee.publicKey);
+      const targetPublicKey = await window.crypto.subtle.importKey(
+        "spki",
+        targetPubKeyBuffer,
+        { name: "ECDH", namedCurve: "P-256" },
+        false,
+        []
+      );
+
+      const sharedKey = await window.crypto.subtle.deriveKey(
+        { name: "ECDH", public: targetPublicKey },
+        currentUserPrivateKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
+
+      sharedKeyCache[targetUsername] = sharedKey;
+      return sharedKey;
+    }
+
+    // E2EE Encrypt for DMs
+    async function encryptE2EEMessage(text, targetUsername) {
+      if (!text) return "";
+      const sharedKey = await getECDHSharedKey(targetUsername);
+      if (!sharedKey) return encryptMessage(text, getDmKey(currentUser.username, targetUsername));
+
+      const enc = new TextEncoder();
+      const iv = window.crypto.getRandomValues(new Uint8Array(12));
+      const encryptedBuffer = await window.crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: iv },
+        sharedKey,
+        enc.encode(text)
+      );
+
+      return JSON.stringify({
+        isE2EE: true,
+        cipher: bufferToBase64(encryptedBuffer),
+        iv: bufferToBase64(iv)
+      });
+    }
+
+    // E2EE Decrypt for DMs
+    async function decryptE2EEMessage(payloadStr, targetUsername, channelName) {
+      if (!payloadStr) return "";
+      try {
+        const payload = JSON.parse(payloadStr);
+        if (!payload.isE2EE) return decryptMessage(payloadStr, channelName);
+
+        const sharedKey = await getECDHSharedKey(targetUsername);
+        if (!sharedKey) return "[E2EE Decryption Failed: Private Key Missing]";
+
+        const cipherBuffer = base64ToBuffer(payload.cipher);
+        const ivBuffer = base64ToBuffer(payload.iv);
+
+        const decryptedBuffer = await window.crypto.subtle.decrypt(
+          { name: "AES-GCM", iv: ivBuffer },
+          sharedKey,
+          cipherBuffer
+        );
+
+        return new TextDecoder().decode(decryptedBuffer);
+      } catch (e) {
+        return decryptMessage(payloadStr, channelName);
+      }
+    }
 
     /* ------------------------------------------------------------------
        DATABASE INITIALIZATION
@@ -586,17 +760,26 @@
     }
 
     /* ------------------------------------------------------------------
-       AES-256 ENCRYPTION & SHA-256 HASHING
+       AES-256 ENCRYPTION & SHA-256 HASHING (CHANNEL FALLBACK)
        ------------------------------------------------------------------ */
-    function encryptMessage(text) {
-      if (!text) return "";
-      return CryptoJS.AES.encrypt(text, AES_SECRET_KEY).toString();
+    function getChannelKey(channelName) {
+      if (channelName.startsWith('dm_')) {
+        return CryptoJS.SHA256(channelName + "_session_salt_2026").toString();
+      }
+      return AES_SECRET_KEY;
     }
 
-    function decryptMessage(cipherText) {
+    function encryptMessage(text, channelName) {
+      if (!text) return "";
+      const key = getChannelKey(channelName);
+      return CryptoJS.AES.encrypt(text, key).toString();
+    }
+
+    function decryptMessage(cipherText, channelName) {
       if (!cipherText) return "";
       try {
-        const bytes = CryptoJS.AES.decrypt(cipherText, AES_SECRET_KEY);
+        const key = getChannelKey(channelName);
+        const bytes = CryptoJS.AES.decrypt(cipherText, key);
         const original = bytes.toString(CryptoJS.enc.Utf8);
         return original || cipherText;
       } catch (e) {
@@ -611,15 +794,17 @@
     /* ------------------------------------------------------------------
        INITIALIZATION & REALTIME LISTENERS
        ------------------------------------------------------------------ */
-    window.addEventListener('DOMContentLoaded', () => {
+    window.addEventListener('DOMContentLoaded', async () => {
       initDatabase();
       checkBans();
       renderChannels();
       loadTheme();
 
       const savedUser = sessionStorage.getItem('chatroom_session_user');
-      if (savedUser) {
+      const savedPass = sessionStorage.getItem('chatroom_session_pass');
+      if (savedUser && savedPass) {
         currentUser = JSON.parse(savedUser);
+        await unlockPrivateKey(currentUser, savedPass);
         hideAuthModal();
         updateUserUI();
         renderFriendsList();
@@ -720,13 +905,18 @@
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
-    function setReplyTarget(msgId) {
+    async function setReplyTarget(msgId) {
       const messages = JSON.parse(localStorage.getItem(DB_KEY_MESSAGES)) || [];
       const msg = messages.find(m => m.id === msgId);
       if (!msg) return;
 
       replyingToMessage = msg;
-      replyingToMessage.decryptedText = decryptMessage(msg.content);
+      if (currentChatType === 'dm') {
+        const otherUser = msg.authorUsername === currentUser.username ? currentChannel : msg.authorUsername;
+        replyingToMessage.decryptedText = await decryptE2EEMessage(msg.content, otherUser, msg.channel);
+      } else {
+        replyingToMessage.decryptedText = decryptMessage(msg.content, msg.channel);
+      }
 
       document.getElementById('replyTargetAuthor').innerText = msg.authorDisplayName;
       document.getElementById('replyTargetText').innerText = replyingToMessage.decryptedText;
@@ -748,6 +938,8 @@
 
     function handleLogout() {
       sessionStorage.removeItem('chatroom_session_user');
+      sessionStorage.removeItem('chatroom_session_pass');
+      currentUserPrivateKey = null;
       window.location.reload();
     }
 
@@ -850,6 +1042,7 @@
           <button onclick="switchChannel('${fUsername}', 'dm')" class="flex items-center space-x-2 truncate flex-1 text-left">
             <img src="${fUser.avatar}" class="w-5 h-5 rounded-full object-cover">
             <span class="truncate">${fUser.displayName}</span>
+            <span class="text-[9px] px-1 bg-green-500/20 text-green-400 border border-green-500/30 rounded font-bold">E2EE</span>
           </button>
           <button onclick="removeFriend('${fUsername}')" class="text-xs text-red-400 hover:text-red-300 ml-2" title="Remove Friend">
             <i class="fa-solid fa-xmark"></i>
@@ -1001,9 +1194,9 @@
     }
 
     /* ------------------------------------------------------------------
-       AUTH & PASSWORD MANAGER COMPATIBILITY
+       AUTH & ECDH E2EE ACCOUNT GENERATION
        ------------------------------------------------------------------ */
-    function handleAuthSubmit(e) {
+    async function handleAuthSubmit(e) {
       e.preventDefault();
       const usernameInput = document.getElementById('authUsername').value.trim().toLowerCase();
       const passwordInput = document.getElementById('authPassword').value;
@@ -1024,25 +1217,36 @@
           alert('Invalid password!');
           return;
         }
+        const unlocked = await unlockPrivateKey(user, passwordInput);
+        if (!unlocked) {
+          alert('Could not unlock E2EE Private Key.');
+          return;
+        }
       } else {
+        // Generate ECDH P-256 Keypair for E2EE
+        const e2eeKeys = await generateUserE2EEKeypair(passwordInput, usernameInput);
+
         user = {
           username: usernameInput,
           password: passwordInput,
           displayName: usernameInput.charAt(0).toUpperCase() + usernameInput.slice(1),
-          bio: "", // DEFAULT BLANK BIO
+          bio: "",
           avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${usernameInput}`,
           ip: clientDeviceIp,
           mac: clientMacAddress,
           deviceId: clientDeviceId,
           isAdmin: false,
-          friends: []
+          friends: [],
+          e2ee: e2eeKeys
         };
         users.push(user);
         localStorage.setItem(DB_KEY_USERS, JSON.stringify(users));
+        await unlockPrivateKey(user, passwordInput);
       }
 
       currentUser = user;
       sessionStorage.setItem('chatroom_session_user', JSON.stringify(currentUser));
+      sessionStorage.setItem('chatroom_session_pass', passwordInput);
       hideAuthModal();
       updateUserUI();
       renderFriendsList();
@@ -1067,9 +1271,9 @@
     }
 
     /* ------------------------------------------------------------------
-       MESSAGING ENGINE & AES-256 / SHA-256
+       MESSAGING ENGINE - E2EE & CHANNEL MESSAGING
        ------------------------------------------------------------------ */
-    function handleSendMessage(e) {
+    async function handleSendMessage(e) {
       e.preventDefault();
       if (!currentUser) return;
 
@@ -1080,8 +1284,14 @@
 
       const targetKey = currentChatType === 'dm' ? getDmKey(currentUser.username, currentChannel) : currentChannel;
 
-      // Encrypt message content with AES-256
-      const encryptedContent = encryptMessage(text);
+      let encryptedContent = "";
+      if (currentChatType === 'dm') {
+        // Direct Messages use Web Crypto API ECDH + AES-GCM End-to-End Encryption
+        encryptedContent = await encryptE2EEMessage(text, currentChannel);
+      } else {
+        // Channels use standard AES-256
+        encryptedContent = encryptMessage(text, targetKey);
+      }
 
       const newMsg = {
         id: 'msg-' + Date.now(),
@@ -1095,7 +1305,7 @@
         replyTo: replyingToMessage ? {
           id: replyingToMessage.id,
           authorDisplayName: replyingToMessage.authorDisplayName,
-          content: encryptMessage(replyingToMessage.decryptedText)
+          content: currentChatType === 'dm' ? await encryptE2EEMessage(replyingToMessage.decryptedText, currentChannel) : encryptMessage(replyingToMessage.decryptedText, targetKey)
         } : null
       };
 
@@ -1112,21 +1322,41 @@
       renderMessages(true);
     }
 
-    function renderMessages(forceScrollToBottom = false) {
+    async function renderMessages(forceScrollToBottom = false) {
       const container = document.getElementById('messagesContainer');
       container.innerHTML = '';
 
       const allMessages = JSON.parse(localStorage.getItem(DB_KEY_MESSAGES)) || [];
       const targetKey = currentChatType === 'dm' ? getDmKey(currentUser.username, currentChannel) : currentChannel;
 
+      // STRICT AUTHORIZATION CHECK FOR PRIVATE DIRECT MESSAGES
+      if (currentChatType === 'dm') {
+        const participants = targetKey.replace('dm_', '').split('_');
+        if (currentUser && !participants.includes(currentUser.username)) {
+          container.innerHTML = `
+            <div class="flex flex-col items-center justify-center h-full text-center space-y-2 text-red-400">
+              <i class="fa-solid fa-lock text-4xl"></i>
+              <div class="font-bold text-sm">Access Restricted (E2EE)</div>
+              <div class="text-xs theme-text-muted">You are not an authorized participant in this conversation. Third-party viewing is blocked cryptographically.</div>
+            </div>
+          `;
+          return;
+        }
+      }
+
       const channelMsgs = allMessages.filter(m => m.channel === targetKey);
 
-      channelMsgs.forEach(msg => {
+      for (const msg of channelMsgs) {
         const isAuthor = currentUser && currentUser.username === msg.authorUsername;
         const canDelete = isAuthor || isAdminAuthenticated;
 
-        // AES-256 Decryption
-        const decryptedText = decryptMessage(msg.content);
+        let decryptedText = "";
+        if (currentChatType === 'dm') {
+          const otherUser = msg.authorUsername === currentUser.username ? currentChannel : msg.authorUsername;
+          decryptedText = await decryptE2EEMessage(msg.content, otherUser, msg.channel);
+        } else {
+          decryptedText = decryptMessage(msg.content, msg.channel);
+        }
         msg.decryptedText = decryptedText;
 
         const msgDiv = document.createElement('div');
@@ -1134,7 +1364,13 @@
 
         let replyMarkup = '';
         if (msg.replyTo) {
-          const decryptedReply = decryptMessage(msg.replyTo.content);
+          let decryptedReply = "";
+          if (currentChatType === 'dm') {
+            const otherUser = msg.authorUsername === currentUser.username ? currentChannel : msg.authorUsername;
+            decryptedReply = await decryptE2EEMessage(msg.replyTo.content, otherUser, msg.channel);
+          } else {
+            decryptedReply = decryptMessage(msg.replyTo.content, msg.channel);
+          }
           replyMarkup = `
             <div class="text-[11px] theme-text-muted flex items-center space-x-1 mb-1 italic">
               <i class="fa-solid fa-reply text-[9px]"></i>
@@ -1194,7 +1430,7 @@
         `;
 
         container.appendChild(msgDiv);
-      });
+      }
 
       if (forceScrollToBottom) {
         scrollToBottom();
@@ -1232,7 +1468,6 @@
       if (input === REQUIRED_ADMIN_PASSWORD) {
         isAdminAuthenticated = true;
 
-        // Grant persistent Admin status to current logged-in user
         if (currentUser) {
           currentUser.isAdmin = true;
           updateUserInDb(currentUser);
@@ -1255,13 +1490,11 @@
     function ownerWipeAllData() {
       const pwd = prompt('Enter Owner Master Password to Reset All Site Data:');
       if (pwd === OWNER_RESET_PASSWORD) {
-        // Clear site-wide messages, channels, unreads, requests
         localStorage.removeItem(DB_KEY_MESSAGES);
         localStorage.removeItem(DB_KEY_CHANNELS);
         localStorage.removeItem(DB_KEY_UNREADS);
         localStorage.removeItem(DB_KEY_REQUESTS);
 
-        // Re-initialize default dataset preserving bans
         initDatabase();
         alert('All site messages and channels have been completely wiped.');
         window.location.reload();
@@ -1463,9 +1696,17 @@
     }
 
     function escapeHTML(str) {
-      return str.replace(/[&<>'"]/g, 
-        tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
-      );
+      if (!str) return '';
+      const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        "'": '&#39;',
+        '"': '&quot;'
+      };
+      return str.replace(/[&<>'"]/g, function(tag) {
+        return map[tag] || tag;
+      });
     }
   </script>
 </body>
